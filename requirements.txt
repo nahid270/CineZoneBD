@@ -1,5 +1,5 @@
-pyrofork==2.3.9
-tgcrypto-pyrofork==1.2.8
+https://github.com/KurimuzonAkuma/pyrogram/archive/v2.1.19.zip
+TgCrypto
 pymongo==4.6.1
 motor==3.3.2
 marshmallow<4.0.0
