@@ -17,10 +17,6 @@ def list_to_str(lst):
         return ", ".join(map(str, lst))
     return ""
 
-
-
-
-
 Image.MAX_IMAGE_PIXELS = None
 warnings.simplefilter("ignore", Image.DecompressionBombWarning)
 async def fetch_image(url, size=(860, 1200)):
@@ -197,4 +193,3 @@ async def get_movie_detailsx(query, id=False, file=None):
     details['backdrop_url'] = backdrop_url
 
     return details
-
