@@ -1,4 +1,4 @@
-git+https://github.com/Pragnesh123/Pyrogram
+git+https://github.com/AdityaHalder/Pyrogram
 TgCrypto
 pymongo==4.6.1
 motor==3.3.2
