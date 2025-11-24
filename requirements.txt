@@ -6,7 +6,7 @@ marshmallow<4.0.0
 umongo==3.1.0
 requests==2.31.0
 beautifulsoup4==4.12.2
-shortzy==0.1.4
+shortzy==0.0.8
 python-dateutil==2.9.0
 pytz==2024.1
 aiohttp==3.9.5
