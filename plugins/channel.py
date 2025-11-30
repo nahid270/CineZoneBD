@@ -1,12 +1,13 @@
 import re
 import logging
 import asyncio
+import textwrap
 from datetime import datetime
 from collections import defaultdict
 from plugins.Dreamxfutures.Imdbposter import get_movie_detailsx, fetch_image, get_movie_details
 from database.users_chats_db import db
 from pyrogram import Client, filters, enums
-from info import CHANNELS, MOVIE_UPDATE_CHANNEL, LINK_PREVIEW, ABOVE_PREVIEW, BAD_WORDS, LANDSCAPE_POSTER, TMDB_POSTER
+from info import CHANNELS, MOVIE_UPDATE_CHANNEL, LINK_PREVIEW, ABOVE_PREVIEW, BAD_WORDS, TMDB_POSTER
 from Script import script
 from database.ia_filterdb import save_file
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -102,7 +103,7 @@ def remove_ignored_words(text: str) -> str:
 
 def get_qualities(text: str) -> str:
     qualities = QUALITY_PATTERN.findall(text)
-    return ", ".join(qualities) if qualities else "N/A"
+    return ", ".join(qualities) if qualities else "Unknown"
 
 def extract_ott_platform(text: str) -> str:
     text = text.lower()
@@ -141,11 +142,11 @@ def extract_media_info(filename: str, caption: str):
     season = episode = year = None
     tag = "#MOVIE"
     processed_raw = base_raw = filename
-    quality = get_qualities(caption_clean) or get_qualities(filename.lower()) or "N/A"
+    quality = get_qualities(caption_clean) or get_qualities(filename.lower()) or "Unknown"
     ott_platform = extract_ott_platform(f"{filename} {caption_clean}")
 
     lang_keys = {k for k in CAPTION_LANGUAGES if k in caption_clean or k in filename.lower()}
-    language = ", ".join(sorted({CAPTION_LANGUAGES[k] for k in lang_keys})) if lang_keys else "N/A"
+    language = ", ".join(sorted({CAPTION_LANGUAGES[k] for k in lang_keys})) if lang_keys else "Unknown"
 
     season, episode = extract_season_episode(filename)
     if season is not None:
@@ -269,14 +270,24 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
             genres = ", ".join(g for g in genre_list if g in STANDARD_GENRES) or "N/A"
         else:
             genres = ", ".join(g for g in raw_genres if g in STANDARD_GENRES) or "N/A"
+        
+        # Get Story/Plot
+        plot = details.get("overview") or details.get("plot") or "Story not available."
+        
+        # Poster Logic
+        poster_url = details.get("poster_url")
+        if not poster_url:
+             poster_url = details.get("backdrop_url")
+
         movie_doc = {
             "_id": base_name,
             "files": [file_data],
-            "poster_url": details.get("backdrop_url") if LANDSCAPE_POSTER and TMDB_POSTER and not error_tmdb else details.get("poster_url"),
+            "poster_url": poster_url,
             "genres": genres,
+            "plot": plot,
             "rating": details.get("rating", "N/A"),
-            "imdb_url": details.get("url", "")if not TMDB_POSTER else details.get("tmdb_url"),
-            "year": media_info["year"] or details.get("year"),
+            "imdb_url": details.get("url", "") if not TMDB_POSTER else details.get("tmdb_url"),
+            "year": media_info["year"] or details.get("year") or "N/A",
             "tag": media_info["tag"],
             "ott_platform": media_info["ott_platform"],
             "message_id": None,
@@ -307,25 +318,150 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         movie_doc["files"].append(file_data)
         schedule_update(bot, base_name)
 
+# --- NEW HELPERS FOR PREMIUM LOOK ---
+
+def get_rating_verdict(rating):
+    """Returns a short verdict string based on rating."""
+    try:
+        r = float(str(rating).split("/")[0])
+        if r >= 8.5: return "🔥 Masterpiece"
+        if r >= 7.5: return "❤️ Must Watch"
+        if r >= 6.0: return "🍿 Good Watch"
+        if r >= 4.0: return "😐 Average"
+        return "💩 Time Pass"
+    except:
+        return "✨ New Release"
+
+def format_plot(text):
+    """Clean plot text, no borders."""
+    if not text:
+        return "Story not available."
+    if len(text) > 300:
+        return text[:300] + "..."
+    return text
+
+def generate_movie_message(movie_doc, base_name):
+    all_qualities = set()
+    all_languages = set()
+    all_tags = set()
+    episodes_by_season = defaultdict(set)
+
+    for file in movie_doc["files"]:
+        if file["quality"] not in ["Unknown", "N/A"]:
+            all_qualities.update(q.strip() for q in file["quality"].split(",") if q.strip())
+        if file["language"] not in ["Unknown", "N/A"]:
+            all_languages.update(l.strip() for l in file["language"].split(",") if l.strip())
+        if file["tag"]: all_tags.add(file["tag"])
+        if file.get("season") and file.get("episode"):
+            episodes_by_season[file["season"]].add(file["episode"])
+
+    primary_tag = "#SERIES" if "#SERIES" in all_tags else "#MOVIE"
+    
+    # Episode Formatter
+    epi_block = ""
+    if episodes_by_season:
+        episode_lines = []
+        for season, episodes in sorted(episodes_by_season.items(), key=lambda x: int(x[0])):
+            # Logic to sort episodes
+            singles = []
+            ranges = []
+            for ep in episodes:
+                if "-" in ep:
+                    ranges.append(ep)
+                else:
+                    try:
+                        singles.append(int(ep))
+                    except ValueError:
+                        ranges.append(ep)
+            singles.sort()
+            
+            # Simple collapse logic for display
+            collapsed = []
+            start = end = None
+            for num in singles:
+                if start is None:
+                    start = end = num
+                elif num == end + 1:
+                    end = num
+                else:
+                    collapsed.append(str(start) if start == end else f"{start}-{end}")
+                    start = end = num
+            if start is not None:
+                collapsed.append(str(start) if start == end else f"{start}-{end}")
+            
+            all_ep_parts = collapsed + sorted(ranges, key=lambda s: int(s.split("-")[0]))
+            episode_lines.append(f"┠ 📺 <b>Season {int(season)}:</b> {', '.join(all_ep_parts)}")
+            
+        epi_block = "\n" + "\n".join(episode_lines)
+
+    # Basic Info
+    genres = movie_doc.get("genres", "N/A")
+    quality_str = ", ".join(sorted(all_qualities)) if all_qualities else "HDRip"
+    language_str = ", ".join(sorted(all_languages)) if all_languages else "Original Audio"
+    year = movie_doc.get("year", "N/A")
+    
+    # Rating & Verdict
+    raw_rating = movie_doc.get("rating", "N/A")
+    verdict = get_rating_verdict(raw_rating)
+    rating_str = f"⭐️ {raw_rating}/10" if raw_rating != "N/A" else "Unrated"
+
+    # Plot
+    plot_text = format_plot(movie_doc.get("plot", "Story not available"))
+
+    # Dynamic Hashtags
+    clean_name = re.sub(r'\W+', '_', base_name)
+    genre_tags = " ".join([f"#{g.strip().replace(' ', '_')}" for g in genres.split(",") if g != "N/A"])
+    hashtags = f"#{clean_name} {genre_tags} {primary_tag}"
+
+    # FINAL MESSAGE FORMAT
+    return f"""
+✨ <b>Just Arrived on Channel</b> ✨
+
+┏━━━━━━━━━━━━━━━━━━━┫
+┃🎬 <b>Title:</b> {base_name}
+┃⭐️ <b>Rating:</b> {rating_str} ({verdict})
+┃🎭 <b>Genre:</b> {genres}
+┃📅 <b>Year:</b> {year}
+┗━━━━━━━━━━━━━━━━━━━┫
+
+<b>⚡️ Media Info:</b>
+┠ 🔊 <b>Lang:</b> {language_str}
+┠ 💿 <b>Quality:</b> {quality_str}
+┠ 📺 <b>Type:</b> {primary_tag.replace('#', '')}{epi_block}
+
+<b>📖 Plot Summary:</b>
+❝ <i>{plot_text}</i> ❞
+
+<b>🔍 Search Tags:</b>
+<code>{hashtags}</code>
+
+───────────────
+  ❤ <b>React</b>  •  🔔 <b>Share</b>  •  📂 <b>Save</b>
+───────────────
+"""
+
 async def send_movie_update(bot, base_name):
     max_retries = 3
-    base_delay = 5
     for attempt in range(max_retries):
         try:
             movie_doc = await db.movie_updates.find_one({"_id": base_name})
-            if not movie_doc:
-                return None
+            if not movie_doc: return None
 
             text = generate_movie_message(movie_doc, base_name)
-            buttons = InlineKeyboardMarkup([[
-                InlineKeyboardButton(
-                    'ɢᴇᴛ ғɪʟᴇs',
-                    url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
-                )
-            ]])
+            
+            # --- FINAL BUTTON CONFIGURATION ---
+            buttons = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton('📥 ɢᴇᴛ ғɪʟᴇs 📥', url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}")
+                ],
+                [
+                     InlineKeyboardButton('♻️ ꜱʜᴀʀᴇ ᴘᴏꜱᴛ', url=f"https://t.me/share/url?url=https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}")
+                ]
+            ])
+            # ----------------------------------
 
             if movie_doc.get("poster_url") and not LINK_PREVIEW:
-                resized_poster = await fetch_image(movie_doc["poster_url"], size=(2560, 1440) if LANDSCAPE_POSTER and TMDB_POSTER and not error_tmdb else (853, 1280))
+                resized_poster = await fetch_image(movie_doc["poster_url"], size=(853, 1280))
                 msg = await bot.send_photo(
                     chat_id=MOVIE_UPDATE_CHANNEL,
                     photo=resized_poster,
@@ -352,8 +488,7 @@ async def send_movie_update(bot, base_name):
             )
             return msg
         except FloodWait as e:
-            wait_time = e.value + 2
-            await asyncio.sleep(wait_time)
+            await asyncio.sleep(e.value + 2)
         except Exception as e:
             logger.error(f"Failed to send movie update: {e}")
             break
@@ -366,12 +501,17 @@ async def update_movie_message(bot, base_name):
             return
 
         text = generate_movie_message(movie_doc, base_name)
-        buttons = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                'ɢᴇᴛ ғɪʟᴇs',
-                url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}"
-            )
-        ]])
+        
+        # --- FINAL BUTTON CONFIGURATION (Must match send function) ---
+        buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton('📥 ɢᴇᴛ ғɪʟᴇs 📥', url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}")
+            ],
+            [
+                 InlineKeyboardButton('♻️ ꜱʜᴀʀᴇ ᴘᴏꜱᴛ', url=f"https://t.me/share/url?url=https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}")
+            ]
+        ])
+        # -------------------------------------------------------------
 
         message_id = movie_doc.get("message_id")
         is_photo = movie_doc.get("is_photo", False)
@@ -417,82 +557,3 @@ async def update_movie_message(bot, base_name):
             await send_movie_update(bot, base_name)
     except Exception as e:
         logger.error(f"Failed to update movie message: {e}")
-
-def generate_movie_message(movie_doc, base_name):
-    all_qualities = set()
-    all_languages = set()
-    all_ott_platforms = set()
-    all_tags = set()
-    episodes_by_season = defaultdict(set)
-
-    for file in movie_doc["files"]:
-        if file["quality"] != "N/A":
-            all_qualities.update(q.strip() for q in file["quality"].split(",") if q.strip())
-        if file["language"] != "N/A":
-            all_languages.update(l.strip() for l in file["language"].split(",") if l.strip())
-        if file["ott_platform"] != "N/A":
-            platforms = [p.strip() for p in file["ott_platform"].split("|") if p.strip()]
-            all_ott_platforms.update(platforms)
-        if file["tag"]:
-            all_tags.add(file["tag"])
-        if file.get("season") and file.get("episode"):
-            season = file["season"]
-            episode = file["episode"]
-            episodes_by_season[season].add(episode)
-
-    primary_tag = "#SERIES" if "#SERIES" in all_tags else "#MOVIE"
-    epi_block = ""
-    if episodes_by_season:
-        episode_lines = []
-        for season, episodes in sorted(episodes_by_season.items(), key=lambda x: int(x[0])):
-            singles = []
-            ranges = []
-
-            for ep in episodes:
-                if "-" in ep:
-                    ranges.append(ep)
-                else:
-                    try:
-                        singles.append(int(ep))
-                    except ValueError:
-                        ranges.append(ep)
-
-            singles.sort()
-            collapsed = []
-            start = end = None
-            for num in singles:
-                if start is None:
-                    start = end = num
-                elif num == end + 1:
-                    end = num
-                else:
-                    collapsed.append(str(start) if start == end else f"{start}-{end}")
-                    start = end = num
-            if start is not None:
-                collapsed.append(str(start) if start == end else f"{start}-{end}")
-
-            all_ep_parts = collapsed + sorted(ranges, key=lambda s: int(s.split("-")[0]))
-            episode_lines.append(f"S{int(season)}: {', '.join(all_ep_parts)}")
-
-        epi_str = "\n".join(episode_lines)
-        if epi_str:
-            epi_block = f"📺 ᴇᴘɪsᴏᴅᴇs : <b>\n{epi_str}</b>"
-
-    genres = movie_doc.get("genres", "N/A")
-    quality_str = ", ".join(sorted(all_qualities)) if all_qualities else "N/A"
-    language_str = ", ".join(sorted(all_languages)) if all_languages else "N/A"
-    ott_str = ", ".join(sorted(all_ott_platforms)) if all_ott_platforms else "N/A"
-
-    return script.MOVIE_UPDATE_NOTIFY_TXT.format(
-        poster_url=movie_doc.get("poster_url", ""),
-        imdb_url=movie_doc.get("imdb_url", ""),
-        filename=base_name,
-        tag=primary_tag,
-        genres=genres,
-        ott=ott_str,
-        quality=quality_str,
-        language=language_str,
-        episodes=epi_block,
-        rating=movie_doc.get("rating", "N/A"),
-        search_link=temp.B_LINK
-    )
