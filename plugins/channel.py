@@ -318,7 +318,7 @@ async def _process_with_lock(bot, filename, caption, media_info, base_name, proc
         movie_doc["files"].append(file_data)
         schedule_update(bot, base_name)
 
-# --- NEW HELPERS FOR PREMIUM LOOK ---
+# --- NEW HELPERS FOR PREMIUM DESIGN ---
 
 def get_rating_verdict(rating):
     """Returns a short verdict string based on rating."""
@@ -357,12 +357,11 @@ def generate_movie_message(movie_doc, base_name):
 
     primary_tag = "#SERIES" if "#SERIES" in all_tags else "#MOVIE"
     
-    # Episode Formatter
+    # Episode Formatter (Collapsing sequences 1,2,3 -> 1-3)
     epi_block = ""
     if episodes_by_season:
         episode_lines = []
         for season, episodes in sorted(episodes_by_season.items(), key=lambda x: int(x[0])):
-            # Logic to sort episodes
             singles = []
             ranges = []
             for ep in episodes:
@@ -375,7 +374,7 @@ def generate_movie_message(movie_doc, base_name):
                         ranges.append(ep)
             singles.sort()
             
-            # Simple collapse logic for display
+            # Logic to collapse display
             collapsed = []
             start = end = None
             for num in singles:
@@ -390,20 +389,20 @@ def generate_movie_message(movie_doc, base_name):
                 collapsed.append(str(start) if start == end else f"{start}-{end}")
             
             all_ep_parts = collapsed + sorted(ranges, key=lambda s: int(s.split("-")[0]))
-            episode_lines.append(f"┠ 📺 <b>Season {int(season)}:</b> {', '.join(all_ep_parts)}")
+            episode_lines.append(f"┃  ├ 📺 <b>Season {int(season)}:</b> {', '.join(all_ep_parts)}")
             
         epi_block = "\n" + "\n".join(episode_lines)
 
     # Basic Info
     genres = movie_doc.get("genres", "N/A")
-    quality_str = ", ".join(sorted(all_qualities)) if all_qualities else "HDRip"
-    language_str = ", ".join(sorted(all_languages)) if all_languages else "Original Audio"
+    quality_str = " | ".join(sorted(all_qualities)) if all_qualities else "HDRip"
+    language_str = " | ".join(sorted(all_languages)) if all_languages else "Original Audio"
     year = movie_doc.get("year", "N/A")
     
     # Rating & Verdict
     raw_rating = movie_doc.get("rating", "N/A")
     verdict = get_rating_verdict(raw_rating)
-    rating_str = f"⭐️ {raw_rating}/10" if raw_rating != "N/A" else "Unrated"
+    rating_str = f"{raw_rating}/10" if raw_rating != "N/A" else "Unrated"
 
     # Plot
     plot_text = format_plot(movie_doc.get("plot", "Story not available"))
@@ -411,25 +410,26 @@ def generate_movie_message(movie_doc, base_name):
     # Dynamic Hashtags
     clean_name = re.sub(r'\W+', '_', base_name)
     genre_tags = " ".join([f"#{g.strip().replace(' ', '_')}" for g in genres.split(",") if g != "N/A"])
-    hashtags = f"#{clean_name} {genre_tags} {primary_tag}"
+    # Limiting genre tags to 3 to keep it clean
+    genre_tags_short = " ".join(genre_tags.split(" ")[:3])
+    hashtags = f"#{clean_name} {genre_tags_short} {primary_tag}"
 
-    # FINAL MESSAGE FORMAT
+    # --- FINAL PREMIUM DESIGN ---
     return f"""
-✨ <b>Just Arrived on Channel</b> ✨
+✨ <b>New Uploaded on Channel</b> ✨
 
-┏━━━━━━━━━━━━━━━━━━━┫
-┃🎬 <b>Title:</b> {base_name}
-┃⭐️ <b>Rating:</b> {rating_str} ({verdict})
-┃🎭 <b>Genre:</b> {genres}
-┃📅 <b>Year:</b> {year}
-┗━━━━━━━━━━━━━━━━━━━┫
+┏ <b>🎬 {base_name}</b>
+┃
+┃ ⭐️ <b>Rating:</b> {rating_str} ({verdict})
+┃ 🎭 <b>Genre:</b> {genres}
+┃ 📅 <b>Year:</b> {year}
+┃
+┣ 💿 <b>Quality:</b> {quality_str}
+┣ 🔊 <b>Language:</b> {language_str}
+┃ 🏷 <b>Type:</b> {primary_tag.replace('#', '')}{epi_block}
+┗
 
-<b>⚡️ Media Info:</b>
-┠ 🔊 <b>Lang:</b> {language_str}
-┠ 💿 <b>Quality:</b> {quality_str}
-┠ 📺 <b>Type:</b> {primary_tag.replace('#', '')}{epi_block}
-
-<b>📖 Plot Summary:</b>
+<b>📝 Storyline:</b>
 ❝ <i>{plot_text}</i> ❞
 
 <b>🔍 Search Tags:</b>
@@ -502,7 +502,7 @@ async def update_movie_message(bot, base_name):
 
         text = generate_movie_message(movie_doc, base_name)
         
-        # --- FINAL BUTTON CONFIGURATION (Must match send function) ---
+        # --- FINAL BUTTON CONFIGURATION ---
         buttons = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton('📥 ɢᴇᴛ ғɪʟᴇs 📥', url=f"https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}")
@@ -511,7 +511,7 @@ async def update_movie_message(bot, base_name):
                  InlineKeyboardButton('♻️ ꜱʜᴀʀᴇ ᴘᴏꜱᴛ', url=f"https://t.me/share/url?url=https://t.me/{temp.U_NAME}?start=getfile-{base_name.replace(' ', '-')}")
             ]
         ])
-        # -------------------------------------------------------------
+        # ----------------------------------
 
         message_id = movie_doc.get("message_id")
         is_photo = movie_doc.get("is_photo", False)
